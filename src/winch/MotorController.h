@@ -31,21 +31,26 @@ class MotorController {
         float highLimitScale = 1.1;
         long tachOffset = 0;
 
-        void setAmps(float amps) {
+        void setAmps(float amps, float forceCorrectionScale) {
+
+            float tempAmps = amps;
+            amps *= forceCorrectionScale;
+
             if (amps>maxAmps) {
                 amps = maxAmps;
             } else if (amps<minAmps) {
                 amps = minAmps;
             }
             vesc->setCurrent(amps);
-            lastAmpsSet = amps;
+            lastAmpsSet = tempAmps;
         }
 
         void setRPM(float rpm) {
             vesc->setRPM(rpm);
         }
 
-        void setBrake(float amps) {
+        void setBrake(float amps, float forceCorrectionScale) {
+            amps *= forceCorrectionScale;
             if (amps>maxBrakeAmps) {
                 amps = maxBrakeAmps;
             } else if (amps<minBrakeAmps) {
@@ -73,7 +78,7 @@ class MotorController {
             }
             return success;
         }
-        void update(uint32_t now);
+        void update(uint32_t now, float forceCorrectionScale);
         void zeroTachometer() {
             tachOffset = vesc->data.tachometer;
         }

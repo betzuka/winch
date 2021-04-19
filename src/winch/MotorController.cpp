@@ -31,21 +31,24 @@ void MotorController::startCurrentRampLimitRPM(uint32_t now, float targetAmps, u
 
 
 
-void MotorController::update(uint32_t now) {
+void MotorController::update(uint32_t now, float forceCorrectionScale) {
 
+
+
+    //forceCorrectionScale = 1.0;
 
     if (mode==BRAKED) {
-        setBrake(brakeAmps);
+        setBrake(brakeAmps, forceCorrectionScale);
     } else if (mode==RELEASED) {
-        setAmps(0);
+        setAmps(0, forceCorrectionScale);
     } else if (mode==CURRENT_ONLY) {
         float newAmps = ampsController.calcNow(now);
-        setAmps(newAmps);
+        setAmps(newAmps, forceCorrectionScale);
     } else if (mode==CURRENT_RPM_LIMIT) {
         float newAmps = ampsController.calcNow(now);
         //apply some hysterisis (highLimitScale is >1)
         float rpmLimitHigh = highLimitScale * rpmLimit;
-        float currentLimitHigh = highLimitScale * ampsController.getTarget();
+        float currentLimitHigh = highLimitScale * ampsController.getTarget() * forceCorrectionScale; //scale this to match actual motor current which will have been scaled
 
         if (rpmLimited && vesc->data.avgMotorCurrent>currentLimitHigh) {
             rpmLimited = false;
@@ -55,7 +58,7 @@ void MotorController::update(uint32_t now) {
         if (rpmLimited) {
             setRPM(rpmLimit);
         } else {
-            setAmps(newAmps);
+            setAmps(newAmps, forceCorrectionScale);
         }
     }
 

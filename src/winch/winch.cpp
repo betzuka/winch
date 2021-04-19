@@ -7,7 +7,9 @@
 #include "common/WinchMessages.h"
 #include "common/SetupCommon.h"
 #include "common/LED.h"
-#include "BMS.h"
+//#include "BMS.h"
+
+#define VERSION_STRING       "v0.2"
 
 //safety params
 #define CTRL_TIMEOUT_PAUSE  2000    //if we don't hear from the controller for CTRL_TIMEOUT_PAUSE pause pulling 
@@ -15,7 +17,7 @@
 #define VESC_TIMEOUT        1000
 #define VESC_UPDATE_INTERVAL 20     //interval between requests to talk to VESC
 #define LINE_STOP_LENGTH    20      //drop line when this number of meters remain and return to idle state
-#define MAX_MOTOR_CURRENT   150
+#define MAX_MOTOR_CURRENT   200
 #define MAX_BRAKE_CURRENT   50
 
 //gui
@@ -36,7 +38,8 @@
 #define LARGE_PULLEY_TEETH  157
 #define SMALL_PULLEY_TEETH  35
 #define DRUM_INNER_DIA      0.2
-#define DRUM_OUTER_DIA      0.325
+#define DRUM_OUTER_DIA      0.31
+#define DRUM_TURNS_TOTAL    1000
 
 //derived constants
 #define TACHO_DEGREES       60      //electrical degrees per tach reading always 60 degrees for VESC
@@ -57,13 +60,18 @@
 #define MOTOR_RPM_TO_ERPM   MOTOR_POLE_PAIRS
 #define DRUM_RPM_TO_ERPM    (MOTOR_RPM_TO_ERPM * GEAR_RATIO)
 
+//we derive a scaling factor for the force to apply based on how full the drum is, factor is 1 when drum is empty and increases as drum fills
+#define MIN_FORCE_CORRECTION_FACTOR             0
+#define MAX_FORCE_CORRECTION_FACTOR             ((DRUM_OUTER_DIA/DRUM_INNER_DIA)-1)
+#define FORCE_CORRECTION_FACTOR_PER_TURN        (MAX_FORCE_CORRECTION_FACTOR/(float)DRUM_TURNS_TOTAL)
+
 LoRaBinding loRaBinding(DEFAULT_BIND_KEY);
 ControllerPacketManager packet(&loRaBinding);
 BluetoothSerial ESP_BT; //Object for Bluetooth
 VescUart vesc;
 MotorController motor(&vesc, MAX_MOTOR_CURRENT, MAX_BRAKE_CURRENT);
 LEDClass led(LED_PIN);
-BMS bms;
+//BMS bms;
 
 class ControllerStateManager {
     private:
@@ -88,6 +96,7 @@ class ControllerStateManager {
             float remainingLine = 0;
             float lineSpeed = 0;
             float drumTurns = 0;
+            float forceCorrectionScale = 1.0;
         } winchStats;
 
         struct {
@@ -187,7 +196,7 @@ class ControllerStateManager {
             Heltec.display->clear();
             Heltec.display->setFont(ArialMT_Plain_10);
             Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
-            sprintf(textBuf, "VESC: %s CTRL: %s", (winchState.vescOk ? "OK" : "ERR"), (!winchState.failsafe ? "OK" : "ERR"));
+            sprintf(textBuf, "%s VESC: %s CTRL: %s", VERSION_STRING, (winchState.vescOk ? "OK" : "ERR"), (!winchState.failsafe ? "OK" : "ERR"));
             
             Heltec.display->drawString(0,0,textBuf);
 
@@ -229,11 +238,24 @@ class ControllerStateManager {
                 long tacho = -motor.getTachometer();
                 long erpm = vesc.data.rpm;
                 
-                winchStats.currentForce = amps * KG_PER_AMP;
+                
                 winchStats.remainingLine = tacho * LENGTH_PER_TACHO;
                 winchStats.drumRPM = erpm * ERPM_TO_DRUM_RPM;
                 winchStats.lineSpeed = erpm * ERPM_TO_LINE_SPEED;
                 winchStats.drumTurns = tacho * DRUM_TURNS_PER_TACHO;
+
+                //calculate remaining turns on drum
+                float forceCorrectionFactor = FORCE_CORRECTION_FACTOR_PER_TURN * (DRUM_TURNS_TOTAL - winchStats.drumTurns);
+
+                if (forceCorrectionFactor<MIN_FORCE_CORRECTION_FACTOR) {
+                    forceCorrectionFactor = MIN_FORCE_CORRECTION_FACTOR;
+                } else if (forceCorrectionFactor>MAX_FORCE_CORRECTION_FACTOR) {
+                    forceCorrectionFactor = MAX_FORCE_CORRECTION_FACTOR;
+                }
+
+                winchStats.forceCorrectionScale = 1.0 + forceCorrectionFactor;
+
+                winchStats.currentForce = (amps * KG_PER_AMP) / winchStats.forceCorrectionScale;
 
                 //during rewind if remaining line goes negative we zero the tacho, this allows us to reset the line length
                 if (winchState.mode==ControllerMode::REWIND && winchStats.remainingLine<0) {
@@ -244,7 +266,7 @@ class ControllerStateManager {
                 vescPoller.reset(now);
             }
 
-           
+            
             bool received = packet.receive(now);
             if (received) {
                 winchState.failsafe = false;
@@ -266,7 +288,7 @@ class ControllerStateManager {
             }
 
             if (received || refreshVesc) {
-                motor.update(now);
+                motor.update(now, winchStats.forceCorrectionScale);
             }
 
             return received;
@@ -281,9 +303,9 @@ void setup() {
     setupCommon();
     pinMode(LED_PIN, OUTPUT);
     Serial1.begin(115200, SERIAL_8N1, VESC_RX_PIN, VESC_TX_PIN);
-    Serial2.begin(115200, SERIAL_8N1, BMS_RX_PIN, -1, false);
+   // Serial2.begin(115200, SERIAL_8N1, BMS_RX_PIN, -1, false);
     vesc.setSerialPort(&Serial1);
-    bms.setPort(&Serial2);
+   // bms.setPort(&Serial2);
     while (!motor.begin()) {
         delay(10);
     }
@@ -294,7 +316,7 @@ void loop() {
     static Timeout screenTimeout(0, SCREEN_REFRESH_INTERVAL);
     static ControllerStateManager controllerStateManager;
     uint32_t now = millis();
-
+/*
     if (bms.update(now)) {
 
         Serial.print("SOC: ");
@@ -304,7 +326,7 @@ void loop() {
         Serial.print(", T2: ");
         Serial.println(bms.temperature2);
 
-    }
+    }*/
     controllerStateManager.tick(now);
 
     led.tick(now);
